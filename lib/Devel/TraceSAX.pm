@@ -15,6 +15,11 @@ Devel::TraceSAX - Trace SAX events
 
     trace_SAX $obj1;
 
+  ## Emitting additional messages
+    use Devel::TraceSAX qw( emit_trace_SAX_message );
+
+    emit_trace_SAX_message "this is a test";
+
 =head1 DESCRIPTION
 
 B<WARNING>: alpha code alert!!! This module and its API subject to change,
@@ -24,11 +29,29 @@ Traces SAX events in a program.  Works by applying Devel::TraceCalls to
 a tracer on the desired classes for all known SAX event types (according to
 XML::SAX::EventMethodMaker and XML::SAX::Machines).
 
+=head2 Emitting messages if and only if Devel::TraceCalls is loaded
+
+    use constant _tracing => defined $Devel::TraceSAX::VERSION;
+
+    BEGIN {
+        eval "use Devel::TraceCalls qw( emit_trace_SAX_message )"
+            if _tracing;
+    }
+
+    emit_trace_SAX_message( "hi!" ) if _tracing;
+
+Using the constant C<_tracing> allows expressions like
+
+    emit_trace_SAX_message(...) if _tracing;
+
+to be optimized away at compile time, resulting in little or no
+performance penalty.
+
 =cut
 
-$VERSION=0.02;
+$VERSION=0.021;
 
-@EXPORT = qw( trace_SAX );
+@EXPORT = qw( trace_SAX emit_trace_SAX_message );
 %EXPORT_TAGS = ( all => \@EXPORT_OK );
 
 ## TODO: Can't recall why this class isn't an exporter, need to try that.
@@ -41,6 +64,35 @@ use UNIVERSAL;
 use Exporter;
 
 use vars qw( @methods );
+
+sub empty($) { ! defined $_[0] || ! length $_[0] }
+
+## When outputting strings, we usually use this to make invisible
+## characters visible and to keep trace messages all on the same line.
+## This does not put the quotation marks on the string because lots of
+## things like PIs and comments don't use them.  This will yield some
+## non-XMLish looking strings, but that's ok, we're going for
+## readability for a perl programmer, not w3c compliance.
+sub _esc {
+    ## Some of these should never occur in XML.  But this isn't
+    ## XML, it's SAX events and anything can happen (sometimes event
+    ## legitamately, esp. with non XML data sources).
+    local $_ = $_[0];
+    s/\\/\\\\/g;
+    s/\n/\\n/g;
+    s/"/&quot;/g;
+    s/([\000-\037])/sprintf "&#%02x;", $1/ge;
+    return $_;
+}
+
+
+sub _dqify {
+    local $_ = $_[0];
+    s/\\/\\\\/g;
+    $_ = _esc $_;
+    return qq{"$_"};
+}
+
 
 @methods = (
     qw(
@@ -92,13 +144,18 @@ sub import {
 ## External API to add a SAX object instance
 sub trace_SAX {
     my ( $processor, $id ) = @_;
-warn $processor;
     trace_calls {
         Objects      => [ $processor ],
         ObjectId     => $id,
         Subs         => \@methods,
         LogFormatter => \&log_formatter,
     };
+}
+
+
+## External API to add a SAX object instance
+sub emit_trace_SAX_message {
+    goto &Devel::TraceCalls::emit_trace_message;
 }
 
 
@@ -185,7 +242,7 @@ sub format_start_element {
             || $_ eq "LocalName"
             || $_ eq "Prefix"
             || $_ eq "Attributes";
-        return undef if defined $elt->{$_};
+        return undef unless empty $elt->{$_};
     }
 
     return {
@@ -198,14 +255,13 @@ sub format_start_element {
                 && exists $elt->{Name}
                 && defined $elt->{Name}
                 )
-                    ? ( defined $elt->{Name} ? $elt->{Name} : "???" )
+                    ? ( defined $elt->{Name} ? _esc $elt->{Name} : "???" )
                     : "???"
             ),
             exists $elt->{Attributes} && defined $elt->{Attributes}
                 ? map {
-                    ## TODO: escape the attr value
-                    " " . $_ . "='" . $elt->{Attributes}->{$_}->{Value} . "'";
-                } keys %{$elt->{Attributes}} 
+                    " " . _esc( $_->{Name} ) . "=" . _dqify $_->{Value} ;
+                } values %{$elt->{Attributes}} 
                 : (),
             ">"
         ),
@@ -225,7 +281,7 @@ sub format_end_element {
             || $_ eq "LocalName"
             || $_ eq "Prefix"
             || $_ eq "Attributes";
-        return undef if defined $elt->{$_};
+        return undef unless empty $elt->{$_};
     }
 
     return {
@@ -238,14 +294,13 @@ sub format_end_element {
                 && exists $elt->{Name}
                 && defined $elt->{Name}
                 )
-                    ? ( defined $elt->{Name} ? $elt->{Name} : "???" )
+                    ? ( defined $elt->{Name} ? _esc $elt->{Name} : "???" )
                     : "???"
             ),
             ">"
         ),
     };
 }
-
 
 sub format_characters {
     my ( $tp, $r, $params ) = @_;
@@ -261,17 +316,7 @@ sub format_characters {
         return undef;
     }
 
-    $data = $data->{Data};
-
-    $data =~ s/\010/\\b/g;
-    $data =~ s/\n/\\n/g;
-    $data =~ s/\r/\\r/g;
-    $data =~ s/\r/\\e/g;
-    $data =~ s/\f/\\f/g;
-    $data =~ s/'/\\'/g;
-
-    ## TODO: escape the data
-    return { Args => ": '$data'\n" };
+    return { Args => ": " . _dqify( $data->{Data} ) . "\n" };
 }
 
 
@@ -283,24 +328,36 @@ sub format_comment {
     return undef if ! defined( $data ) || ref $data ne "HASH";
     return undef if ! exists $data->{Data} || ! defined $data->{Data};
 
-
     for ( keys %$data ) {
         next if $_ eq "Data";
         return undef;
     }
 
-    $data = $data->{Data};
-
-    $data =~ s/\010/\\b/g;
-    $data =~ s/\n/\\n/g;
-    $data =~ s/\r/\\r/g;
-    $data =~ s/\r/\\e/g;
-    $data =~ s/\f/\\f/g;
-    $data =~ s/'/\\'/g;
-
-    ## TODO: escape the data
-    return { Args => ": <!--$data-->\n" };
+    return { Args => ": <!--" . _esc( $data->{Data} ) . "-->\n" };
 }
+
+
+sub format_processing_instruction {
+    my ( $tp, $r, $params ) = @_;
+
+    return undef if @$params != 2;
+    my $data = $params->[1];
+    return undef if ! defined( $data ) || ref $data ne "HASH";
+    return undef if ! exists $data->{Target} || ! defined $data->{Target};
+
+    for ( keys %$data ) {
+        next if $_ eq "Target";
+        next if $_ eq "Data";
+        return undef;
+    }
+
+    my $pi = $data->{Target};
+    $pi .= " $data->{Data}"
+        if exists $data->{Data} && ! empty $data->{Data};
+
+    return { Args => ": <?" . _esc( $pi ) . "?>\n" };
+}
+
 
 sub format_parse {
     my ( $tp, $r, $params ) = @_;
