@@ -2,7 +2,7 @@ package Devel::TraceSAX::DB;
 
 use strict;
 use Devel::TraceCalls qw( trace_calls );
-use XML::SAX::Shims qw( sax_event_names );
+use XML::SAX::EventMethodMaker qw( sax_event_names );
 use UNIVERSAL;
 
 sub debugging() { 0 }

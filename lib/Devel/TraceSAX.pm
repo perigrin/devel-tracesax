@@ -26,7 +26,7 @@ XML::SAX::EventMethodMaker and XML::SAX::Machines).
 
 =cut
 
-$VERSION=0.01;
+$VERSION=0.02;
 
 @EXPORT = qw( trace_SAX );
 %EXPORT_TAGS = ( all => \@EXPORT_OK );
@@ -44,8 +44,10 @@ use vars qw( @methods );
 
 @methods = (
     qw(
+        new
         set_handler
         set_handlers
+        set_aggregator
         start_manifold_document
         end_manifold_document
     ),
